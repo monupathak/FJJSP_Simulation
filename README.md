@@ -40,6 +40,9 @@ This class orchestrates the entire simulation. It runs the main simulation in ti
      4. `store_workcenter_experiences_and_find_optimal()` → stores experience data and selects the best strategy per WorkCenter.
      5. `update_workcenter_strategies()` → applies the optimal strategies and continues training.
 
+![Simulation flow diagram](images/working_diagram.png)
+
+
 ---
 
 ## ▶️ How to Run
