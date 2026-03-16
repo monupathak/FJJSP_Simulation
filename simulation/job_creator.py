@@ -1,8 +1,8 @@
 import simpy
-import random   
+import random
 from typing import Dict, Optional
-from job import Job
-from workcenter import WorkCenter
+from .job import Job
+from .workcenter import WorkCenter
 # from routing_agent import DRLAwareRoutingAgent      
 
 
@@ -74,8 +74,8 @@ class JobCreator:
 
         # route for different job
         type_a = [1,2,3]
-        type_b = [2,3,1]
-        type_c = [3,1,2]
+        type_b = [1,2,3]
+        type_c = [1,2,3]
         prob= random.random()
         # prob = 0.1
         typ_ = 0
@@ -122,4 +122,3 @@ class JobCreator:
             # Remove this line: all_work_centers=self.work_centers,
             # routing_agent=None,  # Also remove routing_agent if it contains generators
             typ=typ_)
-

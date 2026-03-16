@@ -1,6 +1,6 @@
 # from machine import Machine
 from typing import List, Optional, Dict, Tuple, Callable
-from job import Job
+from .job import Job
 
 
 class SequencingAgent:
@@ -41,4 +41,3 @@ class SequencingAgent:
 
         else:  # Default to FIFO
             return machine.queue.pop(0)
-

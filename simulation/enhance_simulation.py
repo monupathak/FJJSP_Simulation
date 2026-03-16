@@ -1,8 +1,8 @@
 import copy
 import simpy
 import random
-from jobcreator import JobCreator      
-from workcenter import WorkCenter
+from .job_creator import JobCreator
+from .workcenter import WorkCenter
 
 from typing import Dict, List, Optional
 
@@ -270,4 +270,3 @@ class EnhancedSubSimulation:
                     if j.start_time >= self.current_time
                 ])
             })
-

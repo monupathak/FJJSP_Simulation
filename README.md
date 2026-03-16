@@ -14,14 +14,18 @@ Researchers can use this simulation framework to:
 
 ## 🔧 Key Components
 
-### **PauseResumeTrainingCoordinator**
-This class orchestrates the entire simulation. It runs the main simulation in time intervals, pauses to collect states, performs short “future” sub-simulations to evaluate alternative strategies, and updates WorkCenter strategies based on observed performance.
+### **Architecture overview**
+- `main.py` bootstraps the simulation by instantiating `PauseResumeTrainingCoordinator` and displaying the layout.
+- `coordinator/training_coordinator.py` hosts the pause-resume training coordinator and orchestrates calls into the other packages.
+- `simulation/` contains the SimPy models (`WorkCenter`, `Machine`, `JobCreator`, and helpers such as `EnhancedSubSimulation`).
+- `memory/workcenter_experience.py` keeps the experience replay buffers used by the coordinator.
+- `metrics/` maintains the metrics collectors (`MetricsCollector`, `RecentMetricsCollector`).
+- `agent/`, `state/`, `reward/`, and `utils/` provide supporting helpers for a future RL-driven rollout (DQN agent + epsilon scheduler, state vectorization, reward computation, and logging utilities, respectively).
+- This separation keeps the simulator ignorant of RL logic while the coordinator can orchestrate the policy search/training loop described below.
 
 ### **WorkCenters & Machines**
-- Each **WorkCenter** manages multiple **Machines**.  
-- Each Machine executes jobs according to the currently selected **sequencing strategy** (e.g., FIFO, SPT, EDD).  
-- In future versions, a **Routing Agent** will be added to decide which WorkCenter incoming jobs should go to.  
-  (Currently, jobs are assigned to the **first available machine**.)
+- Each **WorkCenter** manages multiple **Machines**.
+- Each Machine executes jobs according to the currently selected **sequencing strategy** (`FIFO`, `SPT`, `EDD`, `LPT`, `FIS`).
 
 ---
 
