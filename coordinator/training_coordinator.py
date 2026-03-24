@@ -1,20 +1,31 @@
 import simpy
-from typing import Dict
-from workcenter import WorkCenter
-from jobcreator import JobCreator
-from enhance_simulation import EnhancedSubSimulation
-from workcenter_experience import WorkCenterExperience
-from workcenter_experience import WorkCenterExperienceReplayMemory
-from workcenter_experience import OptimalWorkCenterMemory
-from recent_metrics_collector import RecentMetricsCollector
-from typing import Tuple, List
+from typing import Dict, List, Tuple, Optional
+from agent.dqn_agent import DQNAgent
+from agent.epsilon_scheduler import EpsilonScheduler
+from metrics.recent_metrics_collector import RecentMetricsCollector
+from memory.workcenter_experience import (
+    OptimalWorkCenterMemory,
+    WorkCenterExperience,
+    WorkCenterExperienceReplayMemory,
+)
+from reward.reward_calculator import RewardCalculator
+from simulation.enhance_simulation import EnhancedSubSimulation
+from simulation.job_creator import JobCreator
+from simulation.workcenter import WorkCenter
+from state.state_vectorizer import StateVectorizer
+from utils.logger import get_logger
 
 
 
 class PauseResumeTrainingCoordinator:
-    def __init__(self, num_work_centers=3, num_machines:List[int]=[2,2,2], 
-                 strategies : List[str]=["SPT", "EDD", "FIFO", "LPT", "FIS"]
-                 , setup_time:List[List[int]] = [[0, 10, 15], [10, 0, 20], [15, 20, 0]]):
+    def __init__(self, num_work_centers: int = 3,
+                 num_machines: List[int] = [2,2,2],
+                 strategies: List[str] = ["SPT", "EDD", "FIFO", "LPT", "FIS"],
+                 setup_time: List[List[int]] = [[0, 10, 15], [10, 0, 20], [15, 20, 0]],
+                 rule_mode: str = "dynamic",
+                 static_strategies: Optional[Dict[int, str]] = None,
+                 processing_distributions: Optional[Dict[int, Dict]] = None,
+                 target_utilization: float = 1.02):
         """
         Initialize training coordinator with WorkCenter-level strategy management
 
@@ -22,6 +33,10 @@ class PauseResumeTrainingCoordinator:
             num_work_centers: Number of WorkCenters in the system
             num_machines: Number of machines per WorkCenter
         """
+        self.rule_mode = rule_mode
+        self.static_strategies = static_strategies or {}
+        self.processing_distributions = processing_distributions or {}
+        self.target_utilization = target_utilization
         self.num_episodes = 2
         self.interval_duration = 60  # 4 hours in seconds
         self.evaluation_duration = 60  # 4 hours for sub-simulation
@@ -30,9 +45,10 @@ class PauseResumeTrainingCoordinator:
         self.strategies = strategies
 
         # WorkCenter-level strategies (one strategy per WorkCenter)
-        self.workcenter_strategies = {
-            wc_id: "FIS" for wc_id in range(1, num_work_centers + 1)
-        }
+        self.workcenter_strategies = {}
+        for wc_id in range(1, num_work_centers + 1):
+            default_strategy = self.static_strategies.get(wc_id, "FIS")
+            self.workcenter_strategies[wc_id] = default_strategy
 
         # Experience storage for WorkCenter-level learning
         self.wc_experience_memory = WorkCenterExperienceReplayMemory(capacity=256)
@@ -51,6 +67,13 @@ class PauseResumeTrainingCoordinator:
         self.wc2_count_lower =  0
         self.wc3_count_upper = 0
         self.recent_metric = {}
+        self.logger = get_logger(__name__)
+        self.state_vectorizer = StateVectorizer()
+        self.reward_calculator = RewardCalculator()
+        self.epsilon_scheduler = EpsilonScheduler()
+        self.dqn_agent = DQNAgent(action_space=self.strategies, epsilon_scheduler=self.epsilon_scheduler)
+        self.latest_state_vectors: Dict[int, Tuple[float, ...]] = {}
+        self.reward_estimates: Dict[int, float] = {}
         # Initialize environment
         self.initialize_environment()
 
@@ -62,7 +85,7 @@ class PauseResumeTrainingCoordinator:
         for wc_id in range(1, self.num_work_centers + 1):
             # Each WorkCenter gets its assigned strategy
             wc_strategy = self.workcenter_strategies.get(wc_id, "FIS")
-            #need to add code for custom strategies for each workcenter
+            # need to add code for custom strategies for each workcenter
 
             self.work_centers[wc_id] = WorkCenter(
                 self.env,
@@ -76,7 +99,9 @@ class PauseResumeTrainingCoordinator:
         self.job_creator = JobCreator(
             self.env,
             self.work_centers,
-            num_work_centers=len(self.work_centers)
+            num_work_centers=len(self.work_centers),
+            target_utilization=self.target_utilization,
+            processing_distributions=self.processing_distributions
         )
 
         for wc in self.work_centers.values():
@@ -105,8 +130,8 @@ class PauseResumeTrainingCoordinator:
                   self.wc1_count_lower +=machine.temp_lower
                   self.wc1_count_upper +=machine.temp_upper
                 elif wc_id == 2:
-                  self.wc2_count_lower +=machine.temp_lower
-                  self.wc2_count_upper +=machine.temp_upper
+                  self.wc1_count_lower +=machine.temp_lower
+                  self.wc1_count_upper +=machine.temp_upper
                 else:
                   self.wc3_count_lower += machine.temp_lower
                   self.wc3_count_upper += machine.temp_upper
@@ -120,6 +145,7 @@ class PauseResumeTrainingCoordinator:
             # print(f"Workcenter {wc_state}")
             # self.print_state(wc_state)
 
+        self.latest_state_vectors = self.state_vectorizer.vectorize_all(workcenter_states)
         return workcenter_states
 
     def evaluate_workcenter_strategy_combinations(self, current_time: float):
@@ -177,6 +203,24 @@ class PauseResumeTrainingCoordinator:
                     # Calculate WorkCenter-specific reward
                     sub_sim = result_data['sub_simulation']
                     wc_reward = sub_sim.calculate_workcenter_reward(wc_id)
+                    state_vec = self.latest_state_vectors.get(
+                        wc_id,
+                        self.state_vectorizer.vectorize(initial_wc_states[wc_id])
+                    )
+                    next_state_vec = self.state_vectorizer.vectorize(
+                        sub_sim.final_workcenter_states.get(wc_id, {})
+                    )
+                    reward_estimate = self.reward_calculator.calculate(
+                        initial_wc_states[wc_id],
+                        self.recent_metric or {}
+                    )
+                    self.reward_estimates[wc_id] = reward_estimate
+                    self.dqn_agent.store_experience(
+                        state_vec,
+                        result_data['test_strategy'],
+                        wc_reward,
+                        next_state_vec,
+                    )
 
                     experience = WorkCenterExperience(
                         workcenter_id=wc_id,
@@ -200,6 +244,8 @@ class PauseResumeTrainingCoordinator:
                 print(f"WorkCenter {wc_id}: Optimal Strategy = {optimal_exp.action}, "
                       f"Reward = {optimal_exp.reward:.2f}")
 
+        self.dqn_agent.train_step()
+        self.epsilon_scheduler.step()
         return optimal_strategies
 
     def update_workcenter_strategies(self, optimal_strategies: Dict[int, str]):
@@ -213,6 +259,7 @@ class PauseResumeTrainingCoordinator:
         start_time = self.env.now
         target_time = start_time + self.interval_duration
 
+        self.logger.info(f"Running main simulation interval {start_time}→{target_time}")
         print(f"Running main simulation from {start_time} to {target_time}")
 
         # Ensure all machines are processing
@@ -231,14 +278,16 @@ class PauseResumeTrainingCoordinator:
 
 
 
-    def train(self):
+    def train(self, max_intervals: int = 6):
         """Main training loop with pause-resume approach"""
+        self.logger.info("Starting Simulation with WorkCenter Strategy Management...")
         print("Starting Simulation with WorkCenter Strategy Management...")
         print(f"Input Parameters:")
         print(f"  Intervals : {self.num_episodes}")
         print(f"  Interval Duration: {self.interval_duration/3600} hours")
         print(f"  Future Duration: {self.evaluation_duration/3600} hours")
         print(f"  Strategies: {self.strategies}")
+        print(f"  Rule mode: {self.rule_mode}")
 
         for episode in range(self.num_episodes):
             self.current_episode = episode
@@ -251,7 +300,6 @@ class PauseResumeTrainingCoordinator:
                 self.initialize_environment()
 
             interval_count = 0
-            max_intervals = 6  # Run for 24 hours total (6 * 4 hours)
 
             while interval_count < max_intervals:
                 interval_count += 1
@@ -260,22 +308,17 @@ class PauseResumeTrainingCoordinator:
                 # Step 1: Run main simulation for 4 hours
                 self.run_main_simulation_interval()
 
-                # Step 2: Pause and collect WorkCenter states
-
-                initial_wc_states = self.pause_and_collect_workcenter_states()
-
-                # Step 3: Run strategy evaluations with sub-simulations
-                strategy_results = self.evaluate_workcenter_strategy_combinations(self.env.now)
-
-                # Step 4: Store experiences and find optimal strategies
-                optimal_strategies = self.store_workcenter_experiences_and_find_optimal(
-                    initial_wc_states, strategy_results)
-
-                # # Step 5: Update WorkCenter strategies for next interval
-                self.update_workcenter_strategies(optimal_strategies)
-
-                # Print interval summary
-                self._print_interval_summary(interval_count, optimal_strategies)
+                # Step 2+: Depending on mode, either keep static rules or run search
+                if self.rule_mode == "dynamic":
+                    initial_wc_states = self.pause_and_collect_workcenter_states()
+                    strategy_results = self.evaluate_workcenter_strategy_combinations(self.env.now)
+                    optimal_strategies = self.store_workcenter_experiences_and_find_optimal(
+                        initial_wc_states, strategy_results)
+                    self.update_workcenter_strategies(optimal_strategies)
+                    self._print_interval_summary(interval_count, optimal_strategies)
+                else:
+                    wc_states = self.pause_and_collect_workcenter_states()
+                    self._print_static_summary(interval_count, wc_states)
 
             # Print episode summary
             self._print_episode_summary(episode)
@@ -304,6 +347,40 @@ class PauseResumeTrainingCoordinator:
         print(f"  Jobs Completed: {completed_jobs}/{total_jobs}")
         print(f"  Total WC Experiences: {len(self.wc_experience_memory)}")
         print(f"  Optimal WC Experiences: {len(self.wc_optimal_memory.optimal_experiences)}")
+
+
+    def run_inference(self, max_intervals: int = 6):
+        """Run the simulation without training or strategy search."""
+        self.logger.info("Starting inference-only simulation...")
+        print("\n=== Inference Mode: running simulation without training ===")
+        interval_count = 0
+        while interval_count < max_intervals:
+            interval_count += 1
+            print(f"\n--- Inference Interval {interval_count}/{max_intervals} ---")
+            self.run_main_simulation_interval()
+            wc_states = self.pause_and_collect_workcenter_states()
+            metrics = RecentMetricsCollector(self.env, self.job_creator, time_window=240).calculate()
+            self._print_inference_summary(interval_count, wc_states, metrics or {})
+        print("\nInference run complete.")
+
+    def _print_inference_summary(self, interval: int, wc_states: Dict[int, Dict], metrics: Dict):
+        """Summarize inference interval."""
+        print(f"Interval {interval} Summary:")
+        print(f"  Current Time: {self.env.now}")
+        print(f"  Strategies: {self.workcenter_strategies}")
+        if metrics:
+            print(f"  Recent mean tardiness: {metrics.get('recent_mean_tardiness', 0):.2f}")
+            print(f"  Recent throughput: {metrics.get('recent_throughput', 0):.2f}")
+        for wc_id, state in wc_states.items():
+            print(f"  WC{wc_id} jobs in queue: {state.get('num_jobs', 0)}")
+
+    def _print_static_summary(self, interval: int, wc_states: Dict[int, Dict]):
+        """Summarize interval when using static rules."""
+        print(f"Interval {interval} (static rules) Summary:")
+        print(f"  Current Time: {self.env.now}")
+        print(f"  Strategies (static): {self.workcenter_strategies}")
+        for wc_id, state in wc_states.items():
+            print(f"  WC{wc_id} jobs in queue: {state.get('num_jobs', 0)}")
 
 
     def print_state(self, state: Dict):
@@ -354,5 +431,3 @@ class PauseResumeTrainingCoordinator:
       print(f"\n**Remaining Time Variation**")
       print(f"- Machine 1: {state['coeff_variation_rt_m1']:.4f}")
       print(f"- Machine 2: {state['coeff_variation_rt_m2']:.4f}")
-
-

@@ -1,7 +1,7 @@
 
 import simpy
 import statistics
-from jobcreator import JobCreator
+from simulation.job_creator import JobCreator
 
 
 
@@ -57,4 +57,3 @@ class RecentMetricsCollector:
         print(f"Total Flow Time: {self.metrics['recent_total_flow_time']:.2f}")
         print(f"Average Flow Time: {self.metrics['recent_avg_flow_time']:.2f}")
         print(f"Throughput: {self.metrics['recent_throughput']:.2f} jobs/time unit")
-

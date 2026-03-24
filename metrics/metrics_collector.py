@@ -2,8 +2,8 @@ import simpy
 import pickle
 import statistics
 from typing import Dict
-from jobcreator import JobCreator
-from workcenter import WorkCenter
+from simulation.job_creator import JobCreator
+from simulation.workcenter import WorkCenter
 
 
 class MetricsCollector:
@@ -175,4 +175,3 @@ class MetricsCollector:
         self.recent_metric = recent_metrics
 
         return recent_metrics
-

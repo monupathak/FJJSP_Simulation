@@ -1,12 +1,17 @@
-import simpy 
+import simpy
 import random
 from typing import List, Optional, Dict, Tuple, Callable
-from job import Job
-from sequencing_agent import SequencingAgent
+from .job import Job
+from .sequencing_agent import SequencingAgent
 
 
 class Machine:
-    def __init__(self, env, resource, breakdown_mean, repair_time, machine_id, wc_id,  strategy: str = None,  initial_queue: List = None, sequenceing_agent: SequencingAgent = SequencingAgent("FIS")):
+    def __init__(self, env, resource, breakdown_mean, repair_time, 
+                 machine_id, wc_id,  strategy: str = None,  
+                 initial_queue: List = None, 
+                 sequenceing_agent: SequencingAgent = SequencingAgent("FIS"),
+                 setup_time: List[List[int]] = None
+                    ):
         self.env = env
         self.resource = resource
         self.breakdown_mean = breakdown_mean
@@ -43,7 +48,8 @@ class Machine:
         self.state_history = []
         self.last_state = None
         self.queue_buildup_time = 0
-
+        self.setup_time = setup_time
+        self.last_processed_job_type = None
     def breakdown_process(self):
         while True:
             yield self.env.timeout(random.expovariate(1.0 / self.breakdown_mean))
@@ -289,29 +295,7 @@ class Machine:
         while True and self.env.now > 120:
             if self.is_idle == True:
               print(f"Machine Starting time is : {self.env.now}")
-            # self.get_queue_status()
-            # Check for shift change
-            # if self.env.now >= 60:
-            #     self.get_queue_status()
-
-                # if self.queue : self.get_queue_status()
-                # else : print("Empty Queue")
-                # Print slack times if queue exists
-                # queue_sorted = self.get_sorted_queue(self.queue, self.strategy, self.machine_id)
-                # self.get_expected_slack_sequencing( self, queue_sorted, self.env.now)
-
-            # if self.queue:
-            #     queue_sorted = self.get_sorted_queue(self, self.strategy)
-            #     slack_times = self.get_expected_slack_sequencing(
-            #         self, queue_sorted, self.env.now, self.env.now,
-            #         self.get_exp_processing_time, self.get_available_time_for_job
-            #     )
-            # else:
-            #     print("No jobs in queue at shift change.")
-
-
-
-            # Wait if queue is empty
+            
 
             while not self.queue:
                 self.is_idle = True
@@ -320,23 +304,17 @@ class Machine:
             # Process next job
             if self.queue:
                 self.is_idle = False
-                # job = self.queue.pop(0)
-                # self.get_queue_status()
-                # queue_sorted = self.get_sorted_queue(self.queue, self.strategy, self.machine_id)
-                # self.get_expected_slack_sequencing( self, queue_sorted, self.env.now)
-            # else:
-            #     print("No jobs in queue at shift change.")
-
-                # job = self.sequenceing_agent.select(self.strategy)
-                # self.get_queue_status()
-                # print(self.strategy)
+                
                 job = self.sequenceing_agent.select(self, self.strategy)
                 # print(f"---Time {self.env.now}: Strategy : {self.strategy} Job {job.job_id} Selected on Machine {self.machine_id} (WC {self.wc_id}) DD--- {job.due_date}")
                 if self.machine_id not in job.processing_time[job.current_op_idx]:continue
-                    # print(f"ERROR: Machine {self.machine_id} not eligible for Job {job.job_id} operation {job.current_op_idx}")
-                    # print()
-                    # continue
-
+                if self.last_processed_job_type is not None and self.last_processed_job_type != job.typ:
+                    # Setup time needed
+                    setup_duration = self.setup_time[self.last_processed_job_type-1][job.typ-1]
+                    # print(f"Machine {self.machine_id} performing setup for {setup_duration} time units at {self.env.now} for Job {job.job_id}")
+                    yield self.env.timeout(setup_duration)
+                    print("-----Setup_time_needed------")
+                    self.last_activity_time += setup_duration  # Consider setup time as active time    
                 processing_time = job.processing_time[job.current_op_idx][self.machine_id]
 
                 try:
@@ -344,9 +322,7 @@ class Machine:
                     with self.resource.request(priority=0) as req:
                         yield req
                         self.start_time = self.env.now
-                        # Now we have the resource, process the job
-                        # print(f"Time {self.env.now}: Job {job.job_id} starts on Machine {self.machine_id} (WC {self.wc_id})")
-
+                        
                         job.record_operation_start(self.env.now, self.wc_id, self.machine_id)
                         self.processing_job = job
                         start_time = self.env.now
@@ -358,6 +334,7 @@ class Machine:
 
                         # Process the job
                         yield self.env.timeout(processing_time)
+                        self.last_processed_job_type = job.typ
                         # yield self.env.timeout(2)
                         self.scheduled_jobs.append({
                             'job_id': job.job_id,
@@ -386,25 +363,9 @@ class Machine:
 
                             if not job.is_completed():
                                 self.job_creator.route_job(job)
-
-                            # commented for removing print
-                            # if job.is_completed() :
-
-                              # print(f"-------------------------------Job {job.job_id} has completed all operations----------------------")
-                              # print(f"Due date : {job.due_date}")
-                              # print(f"Compeletion_time = {job.end_time}  current time =  {self.env.now}   tardiness = {job.due_date  -job.end_time}")
-                            # else :
-                            #    prob = random.uniform(0.1, 1.0)
-                            #    if  prob <= 0.7 and not job.rework :
-                            #       job.rework = True
-                            #       job.current_op_idx -= 1
-                            #       print(f"---------------------------------------------------------------------------{job.current_op_idx}--------------------------------------")
-                            #       job.route_job()
-
                         # Resource is automatically released when exiting 'with' block
 
                 except simpy.Interrupt:
                     self.queue.insert(0, job)
                     self.processing_job = None
                     print(f"Time {self.env.now}: Breakdown interrupted Job {job.job_id} on Machine {self.machine_id}")
-

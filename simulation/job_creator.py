@@ -1,8 +1,8 @@
 import simpy
-import random   
+import random
 from typing import Dict, Optional
-from job import Job
-from workcenter import WorkCenter
+from .job import Job
+from .workcenter import WorkCenter
 # from routing_agent import DRLAwareRoutingAgent      
 
 
@@ -10,7 +10,8 @@ from workcenter import WorkCenter
 class JobCreator:
     def __init__(self, env: simpy.Environment, work_centers: Dict[int, 'WorkCenter'],
                  num_work_centers: int, target_utilization: float = 1.02,
-                 current_time: int = 0):
+                 current_time: int = 0,
+                 processing_distributions: Optional[Dict[int, Dict]] = None):
         self.env = env
         self.work_centers = work_centers
         self.num_work_centers = num_work_centers
@@ -21,10 +22,37 @@ class JobCreator:
         # self.routing_agent = routing_agent
         self.env.process(self.create_jobs())
         self.collect =  True
+        self.processing_distributions = processing_distributions or {}
+
+    def _dist_mean(self, wc_id: int) -> float:
+        cfg = self.processing_distributions.get(wc_id, {"type": "uniform", "low": 3.0, "high": 6.0})
+        if cfg["type"] == "normal":
+            return cfg.get("mean", 4.5)
+        if cfg["type"] == "constant":
+            return cfg.get("value", 4.5)
+        # uniform default
+        low = cfg.get("low", 3.0)
+        high = cfg.get("high", 6.0)
+        return (low + high) / 2
+
+    def _sample_processing_time(self, wc_id: int) -> float:
+        cfg = self.processing_distributions.get(wc_id, {"type": "uniform", "low": 3.0, "high": 6.0})
+        dtype = cfg.get("type", "uniform").lower()
+        if dtype == "normal":
+            mean = cfg.get("mean", 4.5)
+            std = cfg.get("std", 1.0)
+            return max(0.01, random.normalvariate(mean, std))
+        if dtype == "constant":
+            return max(0.01, cfg.get("value", 4.5))
+        # default uniform
+        low = cfg.get("low", 3.0)
+        high = cfg.get("high", 6.0)
+        return random.uniform(low, high)
 
     def create_jobs(self):
         while True:
-            mean_processing_time = 4.5
+            # Estimate mean processing time from provided distributions
+            mean_processing_time = sum(self._dist_mean(wc_id) for wc_id in range(1, self.num_work_centers + 1)) / self.num_work_centers
             mean_operations = 3
             total_machines = sum(len(wc.machines) for wc in self.work_centers.values())
 
@@ -74,8 +102,8 @@ class JobCreator:
 
         # route for different job
         type_a = [1,2,3]
-        type_b = [2,3,1]
-        type_c = [3,1,2]
+        type_b = [1,2,3]
+        type_c = [1,2,3]
         prob= random.random()
         # prob = 0.1
         typ_ = 0
@@ -101,8 +129,7 @@ class JobCreator:
             pt_dict = {}
 
             for machine in eligible_machines:
-                pt_dict[machine.machine_id] = random.uniform(3, 6)
-                # pt_dict[machine.machine_id] = 4.5
+                pt_dict[machine.machine_id] = self._sample_processing_time(wc_id)
 
 
             processing_time.append(pt_dict)
@@ -122,4 +149,3 @@ class JobCreator:
             # Remove this line: all_work_centers=self.work_centers,
             # routing_agent=None,  # Also remove routing_agent if it contains generators
             typ=typ_)
-

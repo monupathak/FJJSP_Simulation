@@ -1,15 +1,17 @@
 import simpy
 import statistics
 from typing import List
-from job import Job
-from machine import Machine
+from .job import Job
+from .machine import Machine
 # from routing_agent import DRLAwareRoutingAgent
 BREAKDOWN_MEAN = 500  # Mean time between breakdowns
 REPAIR_TIME = 50      # Mean repair time    
 
 class WorkCenter:
-    def __init__(self, env: simpy.Environment, wc_id: int, num_machines: int,
-                 strategy:  str = "FIS"):
+    def __init__(self, env: simpy.Environment, wc_id: int, 
+                 num_machines: int,
+                 strategy:  str = "FIS",
+                 setup_time: List[List[int]] = None):
         self.env = env
         self.wc_id = wc_id
         self.num_machines = num_machines
@@ -29,6 +31,7 @@ class WorkCenter:
         self.last_workcenter_state = None
         self.state = {}
         self.processed_count = []
+        self.setup_times =  setup_time
 
         # Create machines and assign WorkCenter strategy to all machines
         for i in range(num_machines):
@@ -39,7 +42,8 @@ class WorkCenter:
             # Now self.workcenter_strategy exists and can be used
             machine = Machine(
                 self.env, resource, BREAKDOWN_MEAN, REPAIR_TIME,
-                machine_id, wc_id, self.workcenter_strategy
+                machine_id, wc_id, self.workcenter_strategy,
+                setup_time=self.setup_times
             )
             self.machines.append(machine)
 
@@ -383,4 +387,3 @@ class WorkCenter:
                     combined_state[f"{key}{m_suffix}"] = val
         
         return combined_state
-
